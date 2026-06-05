@@ -61,52 +61,90 @@ jobs:
           GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
           python - <<'EOF'
-          import os, json, glob
+          import os, json, glob, shutil
           from google.oauth2 import service_account
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
 
-          # Load credentials dari secret
-          creds_json  = os.environ['GDRIVE_CREDENTIALS']
-          folder_id   = os.environ['GDRIVE_FOLDER_ID']
-          creds_dict  = json.loads(creds_json)
+          # ── Load credentials ────────────────────────────────
+          creds_json = os.environ['GDRIVE_CREDENTIALS']
+          folder_id  = os.environ['GDRIVE_FOLDER_ID'].strip()
 
+          print(f"📁 Target folder ID: {folder_id}")
+
+          creds_dict = json.loads(creds_json)
           creds = service_account.Credentials.from_service_account_info(
               creds_dict,
               scopes=['https://www.googleapis.com/auth/drive']
           )
           service = build('drive', 'v3', credentials=creds)
 
-          # Upload semua file artefak dari mlruns
+          # ── Verifikasi folder bisa diakses ──────────────────
+          try:
+              folder = service.files().get(
+                  fileId=folder_id,
+                  fields='id, name'
+              ).execute()
+              print(f"✅ Folder ditemukan: {folder.get('name')}")
+          except Exception as e:
+              print(f"❌ Folder tidak bisa diakses: {e}")
+              print("Pastikan:")
+              print("  1. Folder ID benar")
+              print("  2. Service account sudah di-share ke folder")
+              raise
+
+          # ── Buat zip mlruns ─────────────────────────────────
           files_to_upload = []
 
-          # Cari file model dan artefak
-          for pattern in ['MLProject/mlruns/**/*.pkl',
-                          'MLProject/mlruns/**/*.png',
-                          'MLProject/confusion_matrix.png']:
-              files_to_upload.extend(glob.glob(pattern,
-                                               recursive=True))
-
-          # Juga upload mlruns sebagai zip
-          import shutil
           if os.path.exists('MLProject/mlruns'):
-              shutil.make_archive('mlruns_artifact', 'zip',
-                                  'MLProject', 'mlruns')
+              shutil.make_archive(
+                  'mlruns_artifact', 'zip',
+                  'MLProject', 'mlruns'
+              )
               files_to_upload.append('mlruns_artifact.zip')
+              print("✅ mlruns di-zip")
 
+          # Tambahkan confusion matrix jika ada
+          cm_path = 'MLProject/confusion_matrix.png'
+          if os.path.exists(cm_path):
+              files_to_upload.append(cm_path)
+
+          print(f"📦 File yang akan diupload: {files_to_upload}")
+
+          # ── Upload satu per satu ─────────────────────────────
           uploaded = 0
           for fpath in files_to_upload:
               if not os.path.isfile(fpath):
+                  print(f"⚠️  Skip (tidak ada): {fpath}")
                   continue
+
               fname = os.path.basename(fpath)
               meta  = {'name': fname, 'parents': [folder_id]}
-              media = MediaFileUpload(fpath, resumable=True)
-              service.files().create(
-                  body=meta, media_body=media,
-                  fields='id'
-              ).execute()
-              print(f"✅ Uploaded: {fname}")
-              uploaded += 1
 
-          print(f"\n✅ Total uploaded: {uploaded} file")
+              # Tentukan mimetype
+              if fpath.endswith('.zip'):
+                  mimetype = 'application/zip'
+              elif fpath.endswith('.png'):
+                  mimetype = 'image/png'
+              else:
+                  mimetype = 'application/octet-stream'
+
+              media = MediaFileUpload(
+                  fpath,
+                  mimetype  = mimetype,
+                  resumable = True
+              )
+
+              try:
+                  result = service.files().create(
+                      body       = meta,
+                      media_body = media,
+                      fields     = 'id, name'
+                  ).execute()
+                  print(f"✅ Uploaded: {fname} (id: {result.get('id')})")
+                  uploaded += 1
+              except Exception as e:
+                  print(f"❌ Gagal upload {fname}: {e}")
+
+          print(f"\n✅ Total berhasil diupload: {uploaded} file")
           EOF
