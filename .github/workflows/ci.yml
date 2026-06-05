@@ -1,0 +1,112 @@
+# ============================================================
+# ci.yml — GitHub Actions Workflow untuk MLflow CI
+# Trigger: setiap push ke branch main
+# ============================================================
+
+name: MLflow CI — Student Performance
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:    # bisa trigger manual dari GitHub UI
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Checkout repo ──────────────────────────────
+      - name: Run actions/checkout@v3
+        uses: actions/checkout@v3
+
+      # ── Step 2: Setup Python ───────────────────────────────
+      - name: Set up Python 3.12.7
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12.7'
+
+      # ── Step 3: Cek environment ────────────────────────────
+      - name: Check Env
+        run: |
+          python --version
+          pip --version
+
+      # ── Step 4: Install dependencies ──────────────────────
+      - name: Install dependencies
+        run: |
+          pip install mlflow==2.19.0 scikit-learn pandas numpy \
+                      matplotlib seaborn
+
+      # ── Step 5: Set MLflow Tracking URI ───────────────────
+      - name: Set MLflow Tracking URI
+        run: |
+          echo "MLFLOW_TRACKING_URI=./mlruns" >> $GITHUB_ENV
+
+      # ── Step 6: Run MLflow project ────────────────────────
+      - name: Run mlflow project
+        run: |
+          cd MLProject
+          mlflow run . --env-manager=local
+
+      # ── Step 7: Install Google Drive dependencies ─────────
+      - name: Install Python dependencies
+        run: |
+          pip install google-auth google-auth-oauthlib \
+                      google-auth-httplib2 google-api-python-client
+
+      # ── Step 8: Upload artefak ke Google Drive ────────────
+      - name: Upload to Google Drive
+        env:
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          python - <<'EOF'
+          import os, json, glob
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          # Load credentials dari secret
+          creds_json  = os.environ['GDRIVE_CREDENTIALS']
+          folder_id   = os.environ['GDRIVE_FOLDER_ID']
+          creds_dict  = json.loads(creds_json)
+
+          creds = service_account.Credentials.from_service_account_info(
+              creds_dict,
+              scopes=['https://www.googleapis.com/auth/drive']
+          )
+          service = build('drive', 'v3', credentials=creds)
+
+          # Upload semua file artefak dari mlruns
+          files_to_upload = []
+
+          # Cari file model dan artefak
+          for pattern in ['MLProject/mlruns/**/*.pkl',
+                          'MLProject/mlruns/**/*.png',
+                          'MLProject/confusion_matrix.png']:
+              files_to_upload.extend(glob.glob(pattern,
+                                               recursive=True))
+
+          # Juga upload mlruns sebagai zip
+          import shutil
+          if os.path.exists('MLProject/mlruns'):
+              shutil.make_archive('mlruns_artifact', 'zip',
+                                  'MLProject', 'mlruns')
+              files_to_upload.append('mlruns_artifact.zip')
+
+          uploaded = 0
+          for fpath in files_to_upload:
+              if not os.path.isfile(fpath):
+                  continue
+              fname = os.path.basename(fpath)
+              meta  = {'name': fname, 'parents': [folder_id]}
+              media = MediaFileUpload(fpath, resumable=True)
+              service.files().create(
+                  body=meta, media_body=media,
+                  fields='id'
+              ).execute()
+              print(f"✅ Uploaded: {fname}")
+              uploaded += 1
+
+          print(f"\n✅ Total uploaded: {uploaded} file")
+          EOF
