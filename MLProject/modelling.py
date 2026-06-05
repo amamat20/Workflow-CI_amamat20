@@ -1,6 +1,7 @@
 # ============================================================
 # modelling.py — untuk MLflow Project CI
-# Versi ini dirancang untuk berjalan di GitHub Actions
+# Catatan: mlflow run . sudah otomatis buat run,
+# jadi tidak perlu mlflow.start_run() di sini
 # ============================================================
 
 import pandas as pd
@@ -46,8 +47,6 @@ def plot_confusion_matrix(y_true, y_pred):
     return 'confusion_matrix.png'
 
 def main():
-    # Tracking URI dari environment variable
-    # Di GitHub Actions akan di-set otomatis
     tracking_uri = os.getenv('MLFLOW_TRACKING_URI', './mlruns')
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment('student-performance-ci')
@@ -56,43 +55,46 @@ def main():
         DATA_PATH, TARGET_COL
     )
 
+    # Aktifkan autolog
     mlflow.sklearn.autolog()
 
-    with mlflow.start_run(run_name='CI_RandomForest'):
-        model = RandomForestClassifier(
-            n_estimators = 100,
-            max_depth    = 20,
-            random_state = RANDOM_STATE
-        )
-        model.fit(X_train, y_train)
+    # Langsung training tanpa mlflow.start_run()
+    # mlflow run . sudah handle run secara otomatis
+    model = RandomForestClassifier(
+        n_estimators = 100,
+        max_depth    = 20,
+        random_state = RANDOM_STATE
+    )
+    model.fit(X_train, y_train)
 
-        y_pred    = model.predict(X_test)
-        acc       = accuracy_score(y_test, y_pred)
-        precision = precision_score(y_test, y_pred,
-                                    average='weighted',
-                                    zero_division=0)
-        recall    = recall_score(y_test, y_pred,
-                                 average='weighted',
-                                 zero_division=0)
-        f1        = f1_score(y_test, y_pred,
+    y_pred    = model.predict(X_test)
+    acc       = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred,
+                                average='weighted',
+                                zero_division=0)
+    recall    = recall_score(y_test, y_pred,
                              average='weighted',
                              zero_division=0)
+    f1        = f1_score(y_test, y_pred,
+                         average='weighted',
+                         zero_division=0)
 
-        # Manual log tambahan
-        mlflow.log_metric('test_accuracy',  acc)
-        mlflow.log_metric('test_precision', precision)
-        mlflow.log_metric('test_recall',    recall)
-        mlflow.log_metric('test_f1',        f1)
+    # Log metrik tambahan manual
+    mlflow.log_metric('test_accuracy',  acc)
+    mlflow.log_metric('test_precision', precision)
+    mlflow.log_metric('test_recall',    recall)
+    mlflow.log_metric('test_f1',        f1)
 
-        cm_path = plot_confusion_matrix(y_test, y_pred)
-        mlflow.log_artifact(cm_path)
+    # Log artefak confusion matrix
+    cm_path = plot_confusion_matrix(y_test, y_pred)
+    mlflow.log_artifact(cm_path)
 
-        print(f"\n📊 HASIL CI RUN:")
-        print(f"   Accuracy  : {acc:.4f}")
-        print(f"   Precision : {precision:.4f}")
-        print(f"   Recall    : {recall:.4f}")
-        print(f"   F1-Score  : {f1:.4f}")
-        print(f"\n✅ Training selesai")
+    print(f"\n📊 HASIL CI RUN:")
+    print(f"   Accuracy  : {acc:.4f}")
+    print(f"   Precision : {precision:.4f}")
+    print(f"   Recall    : {recall:.4f}")
+    print(f"   F1-Score  : {f1:.4f}")
+    print(f"\n✅ Training selesai")
 
 if __name__ == '__main__':
     main()
